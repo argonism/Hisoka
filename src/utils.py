@@ -1,0 +1,2 @@
+from transformers import BertJapaneseTokenizer
+from model import BertDenseEncoder
