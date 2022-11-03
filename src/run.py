@@ -84,9 +84,9 @@ def train(args: TrainArgs):
         lr_scheduler_type='constant',
         load_best_model_at_end=True,
         per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=2,
+        per_device_eval_batch_size=args.batch_size,
         num_train_epochs=1,
-        remove_unused_columns=False
+        remove_unused_columns=False,
     )
 
     trainer = Trainer(
@@ -106,7 +106,7 @@ from tqdm import tqdm
 def eval(args: EvalArgs):
 
     model_name_or_path = args.model_name_or_path
-    encoder, tokenizer = setup_model_tokenizer(model_name_or_path)
+    encoder, tokenizer = setup_model_tokenizer(model_name_or_path, mode="eval")
     encoder.eval()
     encoder.to("cuda:0")
 

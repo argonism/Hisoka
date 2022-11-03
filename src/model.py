@@ -4,10 +4,11 @@ from torch.nn import TripletMarginWithDistanceLoss
 from transformers import BertPreTrainedModel, DistilBertModel, AlbertTokenizer
 from transformers.modeling_outputs import ModelOutput
 
-def setup_model_tokenizer(model_name_or_path: str) -> tuple[BertPreTrainedModel, AlbertTokenizer]:
+def setup_model_tokenizer(model_name_or_path: str, mode="train") -> tuple[BertPreTrainedModel, AlbertTokenizer]:
     tokenizer = AlbertTokenizer.from_pretrained(model_name_or_path)
-    tokenizer.add_tokens("[Q]", special_tokens=True)
-    tokenizer.add_tokens("[D]", special_tokens=True)
+    if mode == "train":
+        tokenizer.add_tokens("[Q]", special_tokens=True)
+        tokenizer.add_tokens("[D]", special_tokens=True)
 
     encoder = BertDenseEncoder.from_pretrained(model_name_or_path, tokenizer=tokenizer)
     return encoder, tokenizer
@@ -18,8 +19,8 @@ class BertDenseEncoder(BertPreTrainedModel):
 
         self.embedding_dim = 128
         self.encoder = DistilBertModel(config)
-        # if tokenizer is not None:
-        #     self.encoder.resize_token_embeddings(len(tokenizer))
+        if tokenizer is not None and not config.vocab_size == len(tokenizer):
+            self.encoder.resize_token_embeddings(len(tokenizer))
         classifier_dropout = (
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         )
@@ -28,8 +29,6 @@ class BertDenseEncoder(BertPreTrainedModel):
         self.linear = nn.Linear(config.hidden_size, self.embedding_dim)
 
         self.post_init()
-        # self.similarity_func = nn.CosineSimilarity()
-        # self.loss_function = TripletMarginWithDistanceLoss(distance_function=lambda x, y: 1 - self.similarity_func(x, y))
 
     @classmethod
     def calc_similarity(cls, vectors1, vectors2):
