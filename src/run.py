@@ -6,21 +6,16 @@ from transformers import TrainingArguments
 from transformers import Trainer
 from transformers import EarlyStoppingCallback
 
-from model import BertDenseEncoder, setup_model_tokenizer
+from model import setup_model_tokenizer
+from utils import tokenize
 
-from transformers import BertJapaneseTokenizer
 class MMarcoCollator():
     def __init__(self, tokenizer, max_length=512):
         self.tokenizer = tokenizer
         self.max_length = max_length
 
     def _tokenize(self, texts):
-        tokenized = self.tokenizer(texts,
-                               padding=True,
-                               truncation=True,
-                               max_length=self.max_length,
-                               return_tensors='pt')
-        tokenized.pop("token_type_ids")
+        tokenized = tokenize(texts, self.tokenizer)
         return tokenized
 
     def _extract(self, key, examples, prefix):
