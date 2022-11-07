@@ -1,26 +1,43 @@
+import abc
+from typing import List, Dict
+
 import torch
 from torch import nn
-from torch.nn import TripletMarginWithDistanceLoss
 from transformers import BertPreTrainedModel, DistilBertModel, AlbertTokenizer
 from transformers.modeling_outputs import ModelOutput
 
-def setup_model_tokenizer(model_name_or_path: str, mode="train") -> tuple[BertPreTrainedModel, AlbertTokenizer]:
+import numpy as np
+from utils import tokenize
+
+def setup_model_tokenizer(model_name_or_path: str, mode="train", device="cuda:0") -> tuple[BertPreTrainedModel, AlbertTokenizer]:
     tokenizer = AlbertTokenizer.from_pretrained(model_name_or_path)
     if mode == "train":
         tokenizer.add_tokens("[Q]", special_tokens=True)
         tokenizer.add_tokens("[D]", special_tokens=True)
 
     encoder = BertDenseEncoder.from_pretrained(model_name_or_path, tokenizer=tokenizer)
+    # encoder.to(device)
     return encoder, tokenizer
 
-class BertDenseEncoder(BertPreTrainedModel):
+class IBEIRDenseEncoder(metaclass=abc.ABCMeta):
+
+    @abc.abstractmethod
+    def encode_queries(self, queries: List[str], batch_size: int, **kwargs) -> np.ndarray:
+        pass
+
+    @abc.abstractmethod
+    def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs) -> np.ndarray:
+        pass
+
+class BertDenseEncoder(BertPreTrainedModel, IBEIRDenseEncoder):
     def __init__(self, config, tokenizer=None):
         super().__init__(config)
 
-        self.embedding_dim = 128
+        self.embedding_dim = 256
         self.encoder = DistilBertModel(config)
-        if tokenizer is not None and not config.vocab_size == len(tokenizer):
-            self.encoder.resize_token_embeddings(len(tokenizer))
+        self.tokenizer = tokenizer
+        if tokenizer is not None and not config.vocab_size == len(self.tokenizer):
+            self.encoder.resize_token_embeddings(len(self.tokenizer))
         classifier_dropout = (
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         )
@@ -32,12 +49,34 @@ class BertDenseEncoder(BertPreTrainedModel):
 
     @classmethod
     def calc_similarity(cls, vectors1, vectors2):
+        # return torch.mm(vectors1, vectors2.transpose(0, 1))
         return torch.bmm(vectors1.unsqueeze(1), torch.transpose(vectors2.unsqueeze(1), 1, 2))[:, 0]
 
-    def get_emb(self, tokenized):
-        outputs = self.encoder(**tokenized)
-        embedding = outputs.last_hidden_state[:, 0]
-        return embedding
+    def encode(self, texts, batch_size) -> np.ndarray:
+        from tqdm import tqdm
+        texts_len = len(texts)
+        embs = []
+        for batch_idx in tqdm(range(0, texts_len, batch_size)):
+            batch = texts[batch_idx:min(batch_idx+batch_size, texts_len)]
+            tokenized = tokenize(batch, self.tokenizer, device=self.device)
+
+            outputs = self.encoder(**tokenized)
+            emb = outputs.last_hidden_state[:, 0]
+            emb = self.linear(emb)
+            emb = emb.detach().cpu()
+            embs.append(emb)
+
+        return np.concatenate(embs)
+
+    def encode_queries(self, queries: List[str], batch_size: int, **kwargs) -> np.ndarray:
+        queries = ["[Q]" + query for query in queries]
+        query_embs = self.encode(queries, batch_size)
+        return query_embs
+
+    def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs) -> np.ndarray:
+        sentences = [("[D]"+ doc["title"] + " " + doc["text"]).strip() if "title" in doc else doc["text"].strip() for doc in corpus]
+        corpus_emb = self.encode(sentences, batch_size)
+        return corpus_emb
 
     def calc_loss(self, query, positive, negative): 
         sim_func = self.__class__.calc_similarity
