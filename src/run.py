@@ -51,7 +51,6 @@ class EvalArgs(ModelArgs, MiscArgs):
 
 def train(args: TrainArgs):
 
-    # model_name_or_path = "cl-tohoku/bert-base-japanese-v2"
     model_name_or_path = args.model_name_or_path
     encoder, tokenizer = setup_model_tokenizer(model_name_or_path)
 
@@ -68,19 +67,17 @@ def train(args: TrainArgs):
     eval_dataset = dataset.shuffle(seed=seed).select(range(train_size, train_size+eval_size))
 
     training_args = TrainingArguments(
-        output_dir='./model/',
-        evaluation_strategy='steps',
-        eval_steps=5000, 
+        output_dir='./train_output/',
+        evaluation_strategy='epoch',
         logging_strategy='steps',
         logging_steps=50,
-        save_strategy='steps',
-        save_steps=5000,
+        save_strategy='epoch',
         save_total_limit=1,
         lr_scheduler_type='constant',
         load_best_model_at_end=True,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
-        num_train_epochs=1,
+        num_train_epochs=args.num_epoch,
         remove_unused_columns=False,
     )
 
@@ -98,12 +95,68 @@ def train(args: TrainArgs):
                   resume_from_checkpoint=args.resume_from_checkpoint)
 
 from tqdm import tqdm
+from utils import dump_dict_to_file
+def eval_beir(args: EvalArgs):
+    from beir import util, LoggingHandler
+    from beir.retrieval import models
+    from beir.datasets.data_loader import GenericDataLoader
+    from beir.retrieval.evaluation import EvaluateRetrieval
+    from beir.retrieval.search.dense import DenseRetrievalExactSearch as DRES
+    from beir.retrieval.search.lexical import BM25Search as BM25
+
+    import logging
+    import pathlib, os, json
+    from datetime import datetime
+
+    #### Just some code to print debug information to stdout
+    logging.basicConfig(format='%(asctime)s - %(message)s',
+                        level=logging.INFO,
+                        datefmt='%Y-%m-%d %H:%M:%S',
+                        handlers=[LoggingHandler()])
+    #### /print debug information to stdout
+
+    #### Download scifact.zip dataset and unzip the dataset
+    dataset = "mrtydi/japanese"
+    # url = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/{}.zip".format(dataset)
+    # out_dir = os.path.join(pathlib.Path(__file__).parent.parent.absolute(), "datasets")
+    # data_path = util.download_and_unzip(url, out_dir)
+    script_dir = pathlib.Path(__file__).parent.absolute()
+    data_path = pathlib.Path(script_dir.parent.absolute(), f"datasets/{dataset}")
+
+    corpus, queries, qrels = GenericDataLoader(data_folder=data_path).load(split="test")
+
+    queries = {k:v for i, (k, v) in enumerate(queries.items()) if i < 10}
+
+    hostname = "localhost"
+    index_name = dataset.replace("/", "-")
+    initialize = False
+
+    model = BM25(index_name=index_name, hostname=hostname, initialize=initialize)
+    retriever = EvaluateRetrieval(model, k_values=[10])
+
+    results = retriever.retrieve(corpus, queries)
+    dump_dict_to_file(results, "bm25_kvalues=10.json")
+    # ndcg, _map, recall, precision = retriever.evaluate(qrels, results, k_values=[10])
+ 
+    # encoder, tokenizer = setup_model_tokenizer(args.model_name_or_path, mode="eval", device="cuda:0")
+    encoder = DRES(models.SentenceBERT("msmarco-roberta-base-ance-firstp"))
+    # model = DRES(encoder, batch_size=args.batch_size)
+    dense_retriever = EvaluateRetrieval(model, score_function="dot")
+    rerank_results = dense_retriever.rerank(corpus, queries, results, top_k=100)
+    print(rerank_results)
+
+    ndcg, _map, recall, precision = dense_retriever.evaluate(qrels, rerank_results, k_values=[1, 10])
+    eval_result = {
+        "ndcg": ndcg, "map": _map, "recall": recall, "precision": precision
+    }
+    eval_result_path = script_dir.joinpath("eval_result", f"{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    eval_result_path.write_text(json.dumps(eval_result, indent=2, ensure_ascii=False))
+
 def eval(args: EvalArgs):
 
     model_name_or_path = args.model_name_or_path
     encoder, tokenizer = setup_model_tokenizer(model_name_or_path, mode="eval")
     encoder.eval()
-    encoder.to("cuda:0")
 
     mmarco_collator = MMarcoCollator(tokenizer)
 
@@ -156,6 +209,6 @@ if __name__ == "__main__":
         train(train_args)
     elif args.mode == "eval":
         eval_args = EvalArgs(**args_dict)
-        eval(eval_args)
+        eval_beir(eval_args)
     else:
         raise ValueError("You need to specify 'train' or 'eval'")
