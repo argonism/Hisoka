@@ -6,8 +6,15 @@ from transformers import TrainingArguments
 from transformers import Trainer
 from transformers import EarlyStoppingCallback
 
+from tqdm import tqdm
+from pathlib import Path
+import logging
+import json
+from datetime import datetime
+
 from model import setup_model_tokenizer
-from utils import tokenize
+from utils import tokenize, dump_dict_to_file, load_json_from
+
 
 class MMarcoCollator():
     def __init__(self, tokenizer, max_length=512):
@@ -45,13 +52,13 @@ class TrainArgs(ModelArgs, MiscArgs):
     num_epoch: int
     dataset_offset: int
     resume_from_checkpoint: Union[bool, None]
+    output_dir: str
 
 class EvalArgs(ModelArgs, MiscArgs):
     eval_size: int
 
 def train(args: TrainArgs):
 
-    # model_name_or_path = "cl-tohoku/bert-base-japanese-v2"
     model_name_or_path = args.model_name_or_path
     encoder, tokenizer = setup_model_tokenizer(model_name_or_path)
 
@@ -68,19 +75,17 @@ def train(args: TrainArgs):
     eval_dataset = dataset.shuffle(seed=seed).select(range(train_size, train_size+eval_size))
 
     training_args = TrainingArguments(
-        output_dir='./model/',
-        evaluation_strategy='steps',
-        eval_steps=5000, 
+        output_dir=args.output_dir,
+        evaluation_strategy='epoch',
         logging_strategy='steps',
         logging_steps=50,
-        save_strategy='steps',
-        save_steps=5000,
+        save_strategy='epoch',
         save_total_limit=1,
         lr_scheduler_type='constant',
         load_best_model_at_end=True,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
-        num_train_epochs=1,
+        num_train_epochs=args.num_epoch,
         remove_unused_columns=False,
     )
 
@@ -97,41 +102,53 @@ def train(args: TrainArgs):
     trainer.train(ignore_keys_for_eval=['last_hidden_state', 'hidden_states', 'attentions'],
                   resume_from_checkpoint=args.resume_from_checkpoint)
 
-from tqdm import tqdm
-def eval(args: EvalArgs):
+def eval_beir(args: EvalArgs):
+    from beir import LoggingHandler
+    from beir.datasets.data_loader import GenericDataLoader
+    from beir.retrieval.evaluation import EvaluateRetrieval
+    from beir.retrieval.search.dense import DenseRetrievalExactSearch as DRES
+    from beir.retrieval.search.lexical import BM25Search as BM25
 
-    model_name_or_path = args.model_name_or_path
-    encoder, tokenizer = setup_model_tokenizer(model_name_or_path, mode="eval")
-    encoder.eval()
-    encoder.to("cuda:0")
+    logging.basicConfig(format='%(asctime)s - %(message)s',
+                        level=logging.INFO,
+                        datefmt='%Y-%m-%d %H:%M:%S',
+                        handlers=[LoggingHandler()])
 
-    mmarco_collator = MMarcoCollator(tokenizer)
+    dataset = "mrtydi/japanese"
+    script_dir = Path(__file__).parent.absolute()
+    data_path = Path(script_dir.parent.absolute(), f"datasets/{dataset}")
 
-    dataset = load_dataset('unicamp-dl/mmarco', 'japanese')["train"]
+    corpus, queries, qrels = GenericDataLoader(data_folder=data_path).load(split="test")
+    k_values = [1, 10, 100]
 
-    seed = args.seed
-    eval_size = args.eval_size
-    batch_size = args.batch_size
+    hostname = "localhost"
+    index_name = dataset.replace("/", "-")
+    initialize = True
+    bm25 = BM25(index_name=index_name, hostname=hostname, initialize=initialize)
+    retriever = EvaluateRetrieval(bm25, k_values=k_values)
 
-    dataset = dataset.shuffle(seed=seed).select(range(eval_size))
-    dataset_iter = iter(dataset)
+    bm25_cache_path = Path(f"bm25_{dataset}_{max(k_values)}.json")
+    bm25_results = {}
+    if bm25_cache_path.exists():
+        bm25_results = load_json_from(bm25_cache_path)
+    else:
+        bm25_results = retriever.retrieve(corpus, queries)
+        dump_dict_to_file(bm25_results, bm25_cache_path)
+    ndcg, _map, recall, precision = retriever.evaluate(qrels, bm25_results, k_values=k_values)
+ 
+    encoder, tokenizer = setup_model_tokenizer(args.model_name_or_path, mode="eval", device="cuda:0")
+    model = DRES(encoder, batch_size=args.batch_size)
 
-    success, sum_ = 0, 0
-    with torch.no_grad():
-        for step in tqdm(range(len(dataset) // batch_size)):
-            tokenized = mmarco_collator([next(dataset_iter) for _ in range(batch_size)])
-            tokenized = {key:value.to("cuda:0") for key, value in tokenized.items()}
-            # out = encoder(**tokenized)
-            # print(out.loss)
-            query = tokenized["query"]
-            positive = tokenized["positive"]
-            negative = tokenized["negative"]
-            pos_sim = encoder(query, positive=positive).logits
-            neg_sim = encoder(query, positive=negative).logits
-            for example in pos_sim > neg_sim:
-                if example[0]: success += 1
-                sum_ += 1
-    print(success, sum_, success / sum_)
+    dense_retriever = EvaluateRetrieval(model, score_function="dot")
+    rerank_results = dense_retriever.rerank(corpus, queries, bm25_results, top_k=100)
+
+    ndcg, _map, recall, precision = dense_retriever.evaluate(qrels, rerank_results, k_values=k_values)
+    eval_result = {
+        "ndcg": ndcg, "map": _map, "recall": recall, "precision": precision
+    }
+
+    eval_result_path = script_dir.joinpath("eval_result", f"{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    eval_result_path.write_text(json.dumps(eval_result, indent=2, ensure_ascii=False))
 
 from argparse import ArgumentParser
 def parse_known_args():
@@ -143,6 +160,7 @@ def parse_known_args():
     parser.add_argument('-e', '--eval_size', default=3000)
     parser.add_argument('--dataset_offset', default=0)
     parser.add_argument('-n', '--num_epoch', default=1)
+    parser.add_argument('-o', '--output_dir', default="train_output")
     parser.add_argument('--resume_from_checkpoint', default=None)
     
 
@@ -156,6 +174,6 @@ if __name__ == "__main__":
         train(train_args)
     elif args.mode == "eval":
         eval_args = EvalArgs(**args_dict)
-        eval(eval_args)
+        eval_beir(eval_args)
     else:
         raise ValueError("You need to specify 'train' or 'eval'")
