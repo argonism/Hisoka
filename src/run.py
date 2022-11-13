@@ -32,7 +32,6 @@ class MMarcoCollator():
         encodings = {
             'query': self._tokenize(self._extract("query", examples, "[Q]")),
             'positive': self._tokenize(self._extract("positive", examples, "[D]")),
-            'negative': self._tokenize(self._extract("negative", examples, "[D]")),
         }
 
         return encodings
@@ -127,7 +126,7 @@ def eval_beir(args: EvalArgs):
     bm25 = BM25(index_name=index_name, hostname=hostname, initialize=initialize)
     retriever = EvaluateRetrieval(bm25, k_values=k_values)
 
-    bm25_cache_path = Path(f"bm25_{dataset}_{max(k_values)}.json")
+    bm25_cache_path = Path(f"bm25_{index_name}_{max(k_values)}.json")
     bm25_results = {}
     if bm25_cache_path.exists():
         bm25_results = load_json_from(bm25_cache_path)
@@ -136,7 +135,7 @@ def eval_beir(args: EvalArgs):
         dump_dict_to_file(bm25_results, bm25_cache_path)
     ndcg, _map, recall, precision = retriever.evaluate(qrels, bm25_results, k_values=k_values)
  
-    encoder, tokenizer = setup_model_tokenizer(args.model_name_or_path, mode="eval", device="cuda:0")
+    encoder, tokenizer = setup_model_tokenizer(args.model_name_or_path, mode="eval")
     model = DRES(encoder, batch_size=args.batch_size)
 
     dense_retriever = EvaluateRetrieval(model, score_function="dot")

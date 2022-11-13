@@ -160,4 +160,11 @@ cython_debug/
 #.idea/
 
 model
-.bm25_cache
+datasets
+src/eval_result/
+train_output
+
+.python-version
+.vscode
+bm25*
+

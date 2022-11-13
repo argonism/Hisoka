@@ -9,25 +9,24 @@ from transformers.modeling_outputs import ModelOutput
 import numpy as np
 from utils import tokenize
 
-def setup_model_tokenizer(model_name_or_path: str, mode="train", device="cuda:0") -> tuple[BertPreTrainedModel, AlbertTokenizer]:
+def setup_model_tokenizer(model_name_or_path: str, mode="train") -> tuple[BertPreTrainedModel, AlbertTokenizer]:
     tokenizer = AlbertTokenizer.from_pretrained(model_name_or_path)
     if mode == "train":
         tokenizer.add_tokens("[Q]", special_tokens=True)
         tokenizer.add_tokens("[D]", special_tokens=True)
 
     encoder = BertDenseEncoder.from_pretrained(model_name_or_path, tokenizer=tokenizer)
-    # encoder.to(device)
     return encoder, tokenizer
 
 class IBEIRDenseEncoder(metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def encode_queries(self, queries: List[str], batch_size: int, **kwargs) -> np.ndarray:
-        pass
+        ...
 
     @abc.abstractmethod
     def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs) -> np.ndarray:
-        pass
+        ...
 
 class BertDenseEncoder(BertPreTrainedModel, IBEIRDenseEncoder):
     def __init__(self, config, tokenizer=None):
@@ -78,19 +77,14 @@ class BertDenseEncoder(BertPreTrainedModel, IBEIRDenseEncoder):
         corpus_emb = self.encode(sentences, batch_size)
         return corpus_emb
 
-    def calc_loss(self, query, positive, negative): 
-        sim_func = self.__class__.calc_similarity
-    
-        pos_sim = sim_func(query, positive)
-        neg_sim = sim_func(query, negative)
-        logit_matrix = torch.cat([pos_sim, neg_sim], dim=1)
-        labels = torch.zeros(logit_matrix.size(0), dtype=torch.long, device="cuda:0")
-        return nn.CrossEntropyLoss()(logit_matrix, labels)
+    def calc_loss(self, query, positive):
+        scores = torch.mm(query, positive.transpose(0, 1))
+        labels = torch.arange(0, query.size(0), device=scores.device)
+        return torch.nn.CrossEntropyLoss()(scores, labels)
 
     def forward(self,
                 query,
                 positive=None,
-                negative=None,
                 attention_mask=None,
                 position_ids=None,
                 token_type_ids=None,
@@ -107,15 +101,7 @@ class BertDenseEncoder(BertPreTrainedModel, IBEIRDenseEncoder):
         pos_emb = self.linear(pos_emb)
 
         score = self.calc_similarity(query_emb, pos_emb)
-        neg_emb = None
-        if negative is not None:
-            negative_outputs = self.encoder(**negative)
-            neg_emb = negative_outputs.last_hidden_state[:, 0]
-            neg_emb = self.linear(neg_emb)
-
-        loss = None
-        if neg_emb is not None:
-            loss = self.calc_loss(query_emb, pos_emb, neg_emb)
+        loss = self.calc_loss(query_emb, pos_emb)
 
         attentions=None
         if output_attentions:
