@@ -136,7 +136,7 @@ def eval_beir(args: EvalArgs):
         dump_dict_to_file(bm25_results, bm25_cache_path)
     ndcg, _map, recall, precision = retriever.evaluate(qrels, bm25_results, k_values=k_values)
  
-    encoder, tokenizer = setup_model_tokenizer(args.model_name_or_path, mode="eval", device="cuda:0")
+    encoder, tokenizer = setup_model_tokenizer(args.model_name_or_path, mode="eval")
     model = DRES(encoder, batch_size=args.batch_size)
 
     dense_retriever = EvaluateRetrieval(model, score_function="dot")

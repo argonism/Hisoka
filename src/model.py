@@ -9,25 +9,24 @@ from transformers.modeling_outputs import ModelOutput
 import numpy as np
 from utils import tokenize
 
-def setup_model_tokenizer(model_name_or_path: str, mode="train", device="cuda:0") -> tuple[BertPreTrainedModel, AlbertTokenizer]:
+def setup_model_tokenizer(model_name_or_path: str, mode="train") -> tuple[BertPreTrainedModel, AlbertTokenizer]:
     tokenizer = AlbertTokenizer.from_pretrained(model_name_or_path)
     if mode == "train":
         tokenizer.add_tokens("[Q]", special_tokens=True)
         tokenizer.add_tokens("[D]", special_tokens=True)
 
     encoder = BertDenseEncoder.from_pretrained(model_name_or_path, tokenizer=tokenizer)
-    # encoder.to(device)
     return encoder, tokenizer
 
 class IBEIRDenseEncoder(metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def encode_queries(self, queries: List[str], batch_size: int, **kwargs) -> np.ndarray:
-        pass
+        ...
 
     @abc.abstractmethod
     def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs) -> np.ndarray:
-        pass
+        ...
 
 class BertDenseEncoder(BertPreTrainedModel, IBEIRDenseEncoder):
     def __init__(self, config, tokenizer=None):
