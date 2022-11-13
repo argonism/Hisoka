@@ -32,3 +32,7 @@ import json
 def dump_dict_to_file(dic, path):
     path = Path(path)
     path.write_text(json.dumps(dic, indent=2, ensure_ascii=False))
+
+def load_json_from(path):
+    path = Path(path)
+    return json.loads(path.read_text())
