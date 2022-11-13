@@ -126,7 +126,7 @@ def eval_beir(args: EvalArgs):
     bm25 = BM25(index_name=index_name, hostname=hostname, initialize=initialize)
     retriever = EvaluateRetrieval(bm25, k_values=k_values)
 
-    bm25_cache_path = Path(f"bm25_{dataset}_{max(k_values)}.json")
+    bm25_cache_path = Path(f"bm25_{index_name}_{max(k_values)}.json")
     bm25_results = {}
     if bm25_cache_path.exists():
         bm25_results = load_json_from(bm25_cache_path)
