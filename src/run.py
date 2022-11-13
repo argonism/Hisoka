@@ -32,7 +32,6 @@ class MMarcoCollator():
         encodings = {
             'query': self._tokenize(self._extract("query", examples, "[Q]")),
             'positive': self._tokenize(self._extract("positive", examples, "[D]")),
-            'negative': self._tokenize(self._extract("negative", examples, "[D]")),
         }
 
         return encodings
